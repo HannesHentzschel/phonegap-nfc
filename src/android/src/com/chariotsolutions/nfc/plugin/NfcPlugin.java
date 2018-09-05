@@ -89,6 +89,7 @@ public class NfcPlugin extends CordovaPlugin implements NfcAdapter.OnNdefPushCom
     private CallbackContext channelCallback;
     private CallbackContext shareTagCallback;
     private CallbackContext handoverCallback;
+    private java.lang.Object callback;
 
     @Override
     public boolean execute(String action, JSONArray data, CallbackContext callbackContext) throws JSONException {
@@ -212,10 +213,40 @@ public class NfcPlugin extends CordovaPlugin implements NfcAdapter.OnNdefPushCom
         Bundle extras = new Bundle(); // not used
         readerModeCallback = callbackContext;
         getActivity().runOnUiThread(() -> {
-            NfcAdapter nfcAdapter = NfcAdapter.getDefaultAdapter(getActivity());
-            nfcAdapter.enableReaderMode(getActivity(), callback, flags, extras);
+            if(android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT && callback != null ) {
+                NfcAdapter.ReaderCallback callbackCast = ((NfcAdapter.ReaderCallback)callback);
+                NfcAdapter nfcAdapter = NfcAdapter.getDefaultAdapter(getActivity());
+                nfcAdapter.enableReaderMode(getActivity(), callbackCast, flags, extras);
+            }
         });
+    }
 
+    @Override
+    public void initialize(CordovaInterface cordova, CordovaWebView webView) {
+        if(android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+            callback = new NfcAdapter.ReaderCallback() {
+                @Override
+                public void onTagDiscovered(Tag tag) {
+
+                    JSONObject json;
+
+                    // If the tag supports Ndef, try and return an Ndef message
+                    List<String> techList = Arrays.asList(tag.getTechList());
+                    if (techList.contains(Ndef.class.getName())) {
+                        Ndef ndef = Ndef.get(tag);
+                        json = Util.ndefToJSON(ndef);
+                    } else {
+                        json = Util.tagToJSON(tag);
+                    }
+
+                    PluginResult result = new PluginResult(PluginResult.Status.OK, json);
+                    result.setKeepCallback(true);
+                    readerModeCallback.sendPluginResult(result);
+
+                }
+            };
+        }
+        super.initialize(cordova, webView);
     }
 
     private void disableReaderMode(CallbackContext callbackContext) {
@@ -228,28 +259,6 @@ public class NfcPlugin extends CordovaPlugin implements NfcAdapter.OnNdefPushCom
             callbackContext.success();
         });
     }
-
-    private NfcAdapter.ReaderCallback callback = new NfcAdapter.ReaderCallback() {
-        @Override
-        public void onTagDiscovered(Tag tag) {
-
-            JSONObject json;
-
-            // If the tag supports Ndef, try and return an Ndef message
-            List<String> techList = Arrays.asList(tag.getTechList());
-            if (techList.contains(Ndef.class.getName())) {
-                Ndef ndef = Ndef.get(tag);
-                json = Util.ndefToJSON(ndef);
-            } else {
-                json = Util.tagToJSON(tag);
-            }
-
-            PluginResult result = new PluginResult(PluginResult.Status.OK, json);
-            result.setKeepCallback(true);
-            readerModeCallback.sendPluginResult(result);
-
-        }
-    };
 
     private void registerDefaultTag(CallbackContext callbackContext) {
         addTagFilter();
