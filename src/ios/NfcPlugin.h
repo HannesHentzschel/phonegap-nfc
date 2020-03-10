@@ -11,7 +11,7 @@
 #import <CoreNFC/CoreNFC.h>
 #import <WebKit/WebKit.h>
 
-@interface NfcPlugin : CDVPlugin <NFCNDEFReaderSessionDelegate> {
+@interface NfcPlugin : CDVPlugin <NFCNDEFReaderSessionDelegate, NFCTagReaderSessionDelegate> {
 }
 
 // iOS Specific API

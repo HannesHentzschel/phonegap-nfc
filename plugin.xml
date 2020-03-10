@@ -133,7 +133,7 @@
                 <string>TAG</string>  
             </array>
         </config-file>
-        
+
         <header-file src="src/ios/NfcPlugin.h" />
         <source-file src="src/ios/NfcPlugin.m" />
 

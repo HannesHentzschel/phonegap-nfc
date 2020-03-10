@@ -9,7 +9,7 @@
 @interface NfcPlugin() {
     NSString* ndefStartSessionCallbackId;
 }
-@property (strong, nonatomic) NFCNDEFReaderSession *nfcSession;
+@property (strong, nonatomic) NFCReaderSession *nfcSession;
 @end
 
 @implementation NfcPlugin
@@ -32,8 +32,13 @@
 // Unfortunately iOS users need to start a session to read tags
 - (void)beginSession:(CDVInvokedUrlCommand*)command {
     NSLog(@"beginSession");
-
-    _nfcSession = [[NFCNDEFReaderSession new]initWithDelegate:self queue:nil invalidateAfterFirstRead:TRUE];
+    if (@available(iOS 13.0, *)) {
+        _nfcSession = [[NFCTagReaderSession new]
+                       initWithPollingOption:(NFCPollingISO14443 | NFCPollingISO15693 | NFCPollingISO15693) delegate:self queue:dispatch_get_main_queue()];
+    } else {
+        // Fallback on earlier versions
+        _nfcSession = [[NFCNDEFReaderSession new]initWithDelegate:self queue:nil invalidateAfterFirstRead:TRUE];
+    }
     ndefStartSessionCallbackId = [command.callbackId copy];
     [_nfcSession beginSession];
 }
@@ -65,7 +70,7 @@
 - (void)enabled:(CDVInvokedUrlCommand *)command {
     NSLog(@"enabled");
     CDVPluginResult *pluginResult;
-    if ([NFCNDEFReaderSession readingAvailable]) {
+    if ([NFCReaderSession readingAvailable]) {
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
     } else {
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"NO_NFC"];
@@ -74,17 +79,21 @@
 }
 
 #pragma mark - NFCNDEFReaderSessionDelegate
-
-- (void) readerSession:(NFCNDEFReaderSession *)session didDetectNDEFs:(NSArray<NFCNDEFMessage *> *)messages {
-    NSLog(@"NFCNDEFReaderSession didDetectNDEFs");
-    
-    for (NFCNDEFMessage *message in messages) {
-        [self fireNdefEvent: message];
+- (void) tagReaderSession:(NFCTagReaderSession *)session didDetectTags:(NSArray<__kindof id<NFCTag>> *)tags {
+    NSLog(@"NFCTagReaderSession tagReaderSession");
+    for (__kindof id<NFCTag> tag in tags) {
+        
+        NSArray *identifier = getTagIdFromNFCTag(tag);
+        
+        [session connectToTag:(id<NFCTag>)tag completionHandler:^(NSError * _Nullable error) {
+            NSLog(@"NFCTagReaderSession connectToTagError %@ %@", error.localizedDescription, error.localizedFailureReason);
+            [self readNdefMessageFromTag:session didDetectTag:tag withTagId:identifier];
+        }];
     }
 }
 
-- (void) readerSession:(NFCNDEFReaderSession *)session didInvalidateWithError:(NSError *)error {
-    NSLog(@"didInvalidateWithError %@ %@", error.localizedDescription, error.localizedFailureReason);
+- (void)tagReaderSession:(NFCTagReaderSession *)session didInvalidateWithError:(NSError *)error {
+    NSLog(@"tagReaderSession didInvalidateWithError %@ %@", error.localizedDescription, error.localizedFailureReason);
     if (ndefStartSessionCallbackId) {
         NSString* errorMessage = [NSString stringWithFormat:@"error: %@", error.localizedDescription];
         CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
@@ -92,7 +101,24 @@
     }
 }
 
-- (void) readerSessionDidBecomeActive:(nonnull NFCReaderSession *)session {
+- (void) readerSession:(NFCReaderSession *)session didDetectNDEFs:(NSArray<NFCNDEFMessage *> *)messages  API_AVAILABLE(ios(11.0)){
+    NSLog(@"NFCNDEFReaderSession didDetectNDEFs");
+    
+    for (NFCNDEFMessage *message in messages) {
+        [self fireNdefEvent: message withTagId:nil];
+    }
+}
+
+- (void) readerSession:(NFCReaderSession *)session didInvalidateWithError:(NSError *)error  API_AVAILABLE(ios(11.0)){
+    NSLog(@"readerSession didInvalidateWithError %@ %@", error.localizedDescription, error.localizedFailureReason);
+    if (ndefStartSessionCallbackId) {
+        NSString* errorMessage = [NSString stringWithFormat:@"error: %@", error.localizedDescription];
+        CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:errorMessage];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:ndefStartSessionCallbackId];
+    }
+}
+
+- (void) readerSessionDidBecomeActive:(nonnull NFCReaderSession *)session  API_AVAILABLE(ios(11.0)){
     NSLog(@"readerSessionDidBecomeActive");
     if (ndefStartSessionCallbackId) {
         CDVPluginResult *pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
@@ -108,8 +134,8 @@
 // The event handler registered by addNdefListener will handle the JavaScript event fired by fireNfcTagEvent().
 // This is a bit convoluted and based on how PhoneGap 0.9 worked. A new implementation would send the data
 // in a success callback.
--(void) fireNdefEvent:(NFCNDEFMessage *) ndefMessage {
-    NSString *ndefMessageAsJSONString = [self ndefMessagetoJSONString:ndefMessage];
+-(void) fireNdefEvent:(NFCNDEFMessage *) ndefMessage withTagId:(NSArray *)tagId {
+    NSString *ndefMessageAsJSONString = [self ndefMessagetoJSONString:ndefMessage withTagId: tagId];
     NSLog(@"%@", ndefMessageAsJSONString);
 
     // construct string to call JavaScript function fireNfcTagEvent(eventType, tagAsJson);
@@ -122,7 +148,19 @@
     });
 }
 
--(NSString *) ndefMessagetoJSONString:(NFCNDEFMessage *) ndefMessage {
+-(void) readNdefMessageFromTag:(nonnull NFCReaderSession *)session didDetectTag:(__kindof id<NFCTag>)tag withTagId:(NSArray *)identifier {
+    [tag readNDEFWithCompletionHandler:^(NFCNDEFMessage * message, NSError * error) {
+        if (error != nil) {
+            NSLog(@"readNDEFWithCompletionHandler %@ %@", error.localizedDescription, error.localizedFailureReason);
+            [session invalidateSessionWithErrorMessage:@"Read ndef message failed!"];
+        } else {
+            [self fireNdefEvent: message withTagId:identifier];
+            [session invalidateSession];
+        }
+    }];
+}
+
+-(NSString *) ndefMessagetoJSONString:(NFCNDEFMessage *) ndefMessage withTagId:(NSArray *)tagId  {
     
     NSMutableArray *array = [NSMutableArray new];
     for (NFCNDEFPayload *record in ndefMessage.records){
@@ -133,6 +171,9 @@
     // The JavaScript tag object expects a key with ndefMessage
     NSMutableDictionary *wrapper = [NSMutableDictionary new];
     [wrapper setObject:array forKey:@"ndefMessage"];
+    if (tagId != nil && [tagId count] > 0) {
+        [wrapper setObject:tagId forKey:@"id"];
+    }
     return dictionaryAsJSONString(wrapper);
 }
 
@@ -155,6 +196,35 @@ NSArray *uint8ArrayFromNSData(NSData *data) {
         [array addObject:[NSNumber numberWithInt:elem]];
     }
     return array;
+}
+
+// returns an NSArray of uint8_t representing the bytes in the NSData object.
+NSArray *getTagIdFromNFCTag(__kindof id<NFCTag> tag) {
+    NSArray *identifier;
+    switch (tag.type) {
+        case NFCTagTypeFeliCa:
+            identifier = nil;
+            break;
+        case NFCTagTypeMiFare:
+            identifier = uint8ArrayFromNSData([tag asNFCMiFareTag].identifier);
+            break;
+        case NFCTagTypeISO15693:
+            identifier = uint8ArrayFromNSData([tag asNFCISO15693Tag].identifier);
+            break;
+        case NFCTagTypeISO7816Compatible:
+            identifier = uint8ArrayFromNSData([tag asNFCISO7816Tag].identifier);
+            break;
+        default:
+            identifier = nil;
+            break;
+    }
+    
+    NSPredicate *notZero = [NSPredicate predicateWithBlock:
+    ^BOOL(id evalObject,NSDictionary * options) {
+        return [evalObject boolValue];
+    }];
+    identifier = [identifier filteredArrayUsingPredicate:notZero];
+    return identifier;
 }
 
 NSString* dictionaryAsJSONString(NSDictionary *dict) {
