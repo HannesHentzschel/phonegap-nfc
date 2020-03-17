@@ -69,6 +69,7 @@
 
 - (void)enabled:(CDVInvokedUrlCommand *)command {
     NSLog(@"enabled");
+    CDVPluginResult *pluginResult;
     @try {
         if ([NFCReaderSession readingAvailable]) {
             pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
