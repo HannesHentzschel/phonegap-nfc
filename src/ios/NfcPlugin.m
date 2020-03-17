@@ -69,10 +69,15 @@
 
 - (void)enabled:(CDVInvokedUrlCommand *)command {
     NSLog(@"enabled");
-    CDVPluginResult *pluginResult;
-    if ([NFCReaderSession readingAvailable]) {
-        pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
-    } else {
+    @try {
+        if ([NFCReaderSession readingAvailable]) {
+            pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+        } else {
+            pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"NO_NFC"];
+        }
+        
+    }
+    @catch ( NSException *e ) {
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"NO_NFC"];
     }
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
